@@ -347,3 +347,5 @@ min_rev  = st.sidebar.number_input("Screener: Min Revenue Growth %", value=23.0,
 max_peg  = st.sidebar.number_input("Screener: Max PEG", value=5.0, step=0.1)
 max_de   = st.sidebar.number_input("Screener: Max Debt/Equity", value=3.0, step=0.1)
 min_fcfy = st.sidebar.number_input("Screener: Min FCF Yield %", value=-5.0, step=0.5)
+defaults = "AAPL, MSFT, NVDA, AMZN, META, GOOGL, UNH, ANET, ARM, NFLX, PLTR"
+user_text = st.text_area("Enter tickers or company names (comma/space/newline)", defaults)
