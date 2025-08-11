@@ -4,3 +4,4 @@ numpy
 yfinance
 openpyxl
 rapidfuzz
+lxml
