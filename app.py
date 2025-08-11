@@ -1,8 +1,33 @@
 import streamlit as st
 import pandas as pd
+from io import BytesIO
+
+def _excel_bytes(df, sheet_name="Sheet1"):
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        df.to_excel(xw, index=False, sheet_name=sheet_name)
+    buf.seek(0)
+    return buf.getvalue()
 import numpy as np
 import yfinance as yf
+import re
 
+def _clean_ticker(tok: str) -> str:
+    tok = re.sub(r"[^A-Za-z0-9\.-]", "", tok.upper())
+    return tok
+
+def _safe_last_price(tkr):
+    info = tkr.info or {}
+    p = info.get("currentPrice")
+    if p: 
+        return p
+    try:
+        hist = tkr.history(period="1d")
+        if not hist.empty:
+            return float(hist["Close"].iloc[-1])
+    except:
+        pass
+    return float("nan")
 st.set_page_config(page_title="BullStock — Pro", layout="wide")
 st.title("🐂 BullStock — Scoring, Moat & Filters (Auto)")
 
@@ -75,7 +100,7 @@ def fetch_snapshot(ticker:str):
     t = yf.Ticker(ticker)
     info = t.info or {}
     name = info.get("longName") or info.get("shortName") or ticker
-    price = info.get("currentPrice") or (t.fast_info.last_price if hasattr(t,"fast_info") else np.nan)
+    price = _safe_last_price(t)
     peg = info.get("pegRatio", np.nan)
 
     # Revenue growth YoY (%)
@@ -139,7 +164,8 @@ def fetch_snapshot(ticker:str):
 
 # ---------- UI ----------
 default_tickers = "AAPL, MSFT, NVDA, AMZN, META, GOOGL, NFLX, UNH, ANET, ARM"
-tickers_text = st.text_area("Tickers (comma/space separated)", default_tickers)
+raw = tickers_text.replace("\n", " ").replace(",", " ").split()
+tickers = [_clean_ticker(t) for t in raw if _clean_ticker(t)]
 
 st.sidebar.header("Economic Moat (defaults applied to all)")
 brand   = st.sidebar.slider("Brand & Pricing", 0,10,6)
@@ -215,11 +241,32 @@ if run:
     st.dataframe(df_f, use_container_width=True, height=420)
 
     c1, c2 = st.columns(2)
-    with c1:
-        st.download_button("Download FILTERED (Excel)", df_f.to_excel(index=False), "bullstock_filtered.xlsx")
-        st.download_button("Download FILTERED (CSV)", df_f.to_csv(index=False).encode("utf-8"), "bullstock_filtered.csv")
-    with c2:
-        st.download_button("Download ALL (Excel)", df.to_excel(index=False), "bullstock_all.xlsx")
-        st.download_button("Download ALL (CSV)", df.to_csv(index=False).encode("utf-8"), "bullstock_all.csv")
+    c1, c2 = st.columns(2)
+with c1:
+    st.download_button(
+        "Download FILTERED (Excel)",
+        data=_excel_bytes(df_f, "Filtered"),
+        file_name="bullstock_filtered.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    st.download_button(
+        "Download FILTERED (CSV)",
+        data=df_f.to_csv(index=False).encode("utf-8"),
+        file_name="bullstock_filtered.csv",
+        mime="text/csv",
+    )
+with c2:
+    st.download_button(
+        "Download ALL (Excel)",
+        data=_excel_bytes(df, "All"),
+        file_name="bullstock_all.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    st.download_button(
+        "Download ALL (CSV)",
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name="bullstock_all.csv",
+        mime="text/csv",
+    )q
 else:
     st.info("Enter tickers, adjust moat defaults & filters, then press **Run**.")
