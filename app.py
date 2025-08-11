@@ -1,3 +1,6 @@
+# ============================== BullStock (Streamlit) ==============================
+# Sections are marked with "====" headers. To patch later, search for that header.
+# ================================================================================
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,11 +8,11 @@ import yfinance as yf
 import re
 from io import BytesIO
 
-# =============== Page =================
+# ==== 0) PAGE SETUP ==============================================================
 st.set_page_config(page_title="BullStock", layout="wide")
 st.title("BullStock — Moat + Financial Screener (S&P 500)")
 
-# =============== Helpers ==============
+# ==== 1) HELPERS =================================================================
 def excel_bytes(df: pd.DataFrame, sheet="Sheet1") -> bytes:
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
@@ -24,49 +27,69 @@ def safe_price(tkr: yf.Ticker):
     info = tkr.info or {}
     p = info.get("currentPrice")
     if p is not None:
-        try: return float(p)
-        except: pass
+        try:
+            return float(p)
+        except Exception:
+            pass
     try:
         h = tkr.history(period="1d")
-        if not h.empty: return float(h["Close"].iloc[-1])
-    except: pass
+        if not h.empty:
+            return float(h["Close"].iloc[-1])
+    except Exception:
+        pass
     return None
 
-# ---- PEG fallbacks ----
+# ---- PEG fallbacks ---------------------------------------------------------------
 def _eps_cagr_from_financials(tkr: yf.Ticker, info: dict) -> float | None:
+    """Try to compute multi‑year EPS CAGR; returns decimal (0.18 = 18%)."""
     try:
         inc = tkr.financials
-        if inc is None or inc.empty: return None
+        if inc is None or inc.empty:
+            return None
+
+        # Prefer EPS row if present
         eps_rows = [r for r in inc.index if "eps" in r.lower()]
         if eps_rows:
             s = inc.loc[eps_rows[0]].dropna()
             if len(s) >= 2:
-                v0, vN, n = float(s.iloc[-1]), float(s.iloc[0]), len(s)-1
-                if v0 > 0 and vN > 0 and n > 0: return (vN/v0)**(1/n) - 1
+                v0 = float(s.iloc[-1]); vN = float(s.iloc[0]); n = len(s) - 1
+                if v0 > 0 and vN > 0 and n > 0:
+                    return (vN / v0) ** (1 / n) - 1
+
+        # Fallback: Net Income / sharesOutstanding
         ni_rows = [r for r in inc.index if "net income" in r.lower()]
         so = info.get("sharesOutstanding")
         if ni_rows and so and so > 0:
             s = inc.loc[ni_rows[0]].dropna()
             if len(s) >= 2:
-                v0, vN, n = float(s.iloc[-1])/float(so), float(s.iloc[0])/float(so), len(s)-1
-                if v0 > 0 and vN > 0 and n > 0: return (vN/v0)**(1/n) - 1
-    except: pass
+                v0 = float(s.iloc[-1]) / float(so)
+                vN = float(s.iloc[0]) / float(so)
+                n = len(s) - 1
+                if v0 > 0 and vN > 0 and n > 0:
+                    return (vN / v0) ** (1 / n) - 1
+    except Exception:
+        pass
     return None
 
 def _fallback_peg(tkr: yf.Ticker, price: float | None, info: dict) -> float | None:
+    """PEG = (P/E) / (EPS CAGR in %), try trailingPE or price/forwardEps."""
     pe = info.get("trailingPE")
     if pe is None and price is not None:
         fwd_eps = info.get("forwardEps")
         if fwd_eps:
-            try: pe = float(price)/float(fwd_eps)
-            except: pe = None
-    g = _eps_cagr_from_financials(tkr, info)  # decimal (0.18)
+            try:
+                pe = float(price) / float(fwd_eps)
+            except Exception:
+                pe = None
+    g = _eps_cagr_from_financials(tkr, info)  # decimal
     if pe and g and g > 0:
-        try: return float(pe)/(float(g)*100.0)
-        except: return None
+        try:
+            return float(pe) / (float(g) * 100.0)
+        except Exception:
+            return None
     return None
 
-# =============== S&P500 list ==========
+# ==== 2) S&P 500 UNIVERSE ========================================================
 @st.cache_data
 def load_sp500() -> pd.DataFrame:
     try:
@@ -75,12 +98,13 @@ def load_sp500() -> pd.DataFrame:
             cols = {c.lower(): c for c in t.columns}
             if "symbol" in cols and ("security" in cols or "company" in cols):
                 sym = cols["symbol"]; name = cols.get("security", cols.get("company"))
-                w = t[[sym, name]].rename(columns={sym:"Ticker", name:"Company"})
-                w["Ticker"]  = w["Ticker"].str.upper().str.strip()
+                w = t[[sym, name]].rename(columns={sym: "Ticker", name: "Company"})
+                w["Ticker"] = w["Ticker"].str.upper().str.strip()
                 w["Company"] = w["Company"].str.strip()
-                return w[["Ticker","Company"]]
-    except: pass
-    # fallback
+                return w[["Ticker", "Company"]]
+    except Exception:
+        pass
+    # Minimal fallback so the app still works
     return pd.DataFrame([
         ("AAPL","Apple Inc."), ("MSFT","Microsoft Corporation"), ("NVDA","NVIDIA Corporation"),
         ("AMZN","Amazon.com, Inc."), ("META","Meta Platforms, Inc."), ("GOOGL","Alphabet Inc. (Class A)"),
@@ -91,31 +115,44 @@ def load_sp500() -> pd.DataFrame:
 SP500 = load_sp500()
 _ALL_TICKERS = set(SP500["Ticker"])
 
-# =============== Resolver =============
+# ==== 3) NAME/TICKER RESOLVER ====================================================
 def name_to_ticker(user_text: str) -> str | None:
-    if not user_text: return None
+    if not user_text:
+        return None
     raw = user_text.strip()
     cleaned = clean_tok(raw)
-    if cleaned in _ALL_TICKERS: return cleaned
-    if 1 <= len(cleaned) <= 6 and re.fullmatch(r"[A-Z0-9.\-]{1,6}", cleaned): return cleaned
+
+    # Exact ticker in S&P
+    if cleaned in _ALL_TICKERS:
+        return cleaned
+
+    # Looks like ticker? accept
+    if 1 <= len(cleaned) <= 6 and re.fullmatch(r"[A-Z0-9.\-]{1,6}", cleaned):
+        return cleaned
+
+    # Company name contains
     cand = SP500[SP500["Company"].str.upper().str.contains(re.escape(raw.upper()))]
-    if not cand.empty: return cand.iloc[0]["Ticker"]
+    if not cand.empty:
+        return cand.iloc[0]["Ticker"]
+
     return cleaned or None
 
 def expand_input_to_tickers(text: str) -> list[str]:
-    if not (text or "").strip(): return []
+    if not (text or "").strip():
+        return []
     toks = re.split(r"[,\n;| ]+", text.strip())
     out = []
     for t in toks:
         tk = name_to_ticker(t)
-        if tk: out.append(tk)
-    seen=set(); dedup=[]
+        if tk:
+            out.append(tk)
+    seen = set(); dedup = []
     for x in out:
         if x not in seen:
             seen.add(x); dedup.append(x)
     return dedup
 
-# =============== Scoring ==============
+# ==== 4) SCORING =================================================================
 def s_rev(y):
     if y is None or pd.isna(y): return 0
     if y > 20: return 10
@@ -132,7 +169,8 @@ def s_de(x):
     return 0
 
 def s_peg(p):
-    if p is None or pd.isna(p): return 5  # neutral if missing
+    # Missing PEG = neutral 5
+    if p is None or pd.isna(p): return 5
     if p < 1:  return 10
     if p < 2:  return 6
     if p < 3:  return 3
@@ -148,9 +186,10 @@ def s_fcfy(y):
     return 0
 
 def moat_avg(brand, barriers, switching, network, scale):
-    w = [1.0, 1.25, 1.0, 0.75, 1.25]  # give weight to Barriers & Scale
+    # Adam Khoo–style: emphasize Barriers & Scale
+    w = [1.0, 1.25, 1.0, 0.75, 1.25]
     v = [brand, barriers, switching, network, scale]
-    return round(sum(vi*wi for vi,wi in zip(v,w))/sum(w), 2)
+    return round(sum(vi*wi for vi, wi in zip(v, w)) / sum(w), 2)
 
 def moat_note(name, label, score):
     if score >= 9:
@@ -171,29 +210,34 @@ def moat_note(name, label, score):
 def total_score(rev_s, de_s, fcfy_s, peg_s, moat_s):
     return round((rev_s + de_s + fcfy_s + peg_s + moat_s) / 5.0, 2)
 
-# =============== Data fetch ===========
+# ==== 5) DATA FETCH (pure function; no globals) ==================================
 def first_val(series, keys):
     for k in keys:
-        if k in series and pd.notna(series[k]): return series[k]
+        if k in series and pd.notna(series[k]):
+            return series[k]
     return None
 
-def fetch_snapshot(tk: str):
+def fetch_snapshot(tk: str, moat_inputs: dict):
+    """Return one dict row of metrics + scores for a ticker."""
     t = yf.Ticker(tk)
     info = t.info or {}
     name = info.get("longName") or info.get("shortName") or tk
+
     price = safe_price(t)
 
-    # PEG with fallback
+    # PEG (with fallback)
     peg = info.get("pegRatio")
-    if peg is None or pd.isna(peg): peg = _fallback_peg(t, price, info)
+    if peg is None or pd.isna(peg):
+        peg = _fallback_peg(t, price, info)
 
     # Revenue growth YoY (%)
     yoy = None
     if info.get("revenueGrowth") is not None:
         try:
             rg = float(info["revenueGrowth"])
-            yoy = rg*100 if abs(rg) <= 1 else rg
-        except: pass
+            yoy = rg * 100 if abs(rg) <= 1 else rg
+        except Exception:
+            pass
     if yoy is None:
         try:
             inc = t.financials
@@ -202,25 +246,29 @@ def fetch_snapshot(tk: str):
                 if k:
                     rev = inc.loc[k[0]].dropna()
                     if len(rev) >= 2 and float(rev.iloc[1]) != 0:
-                        yoy = float((rev.iloc[0]-rev.iloc[1]) / rev.iloc[1] * 100.0)
-        except: pass
+                        yoy = float((rev.iloc[0] - rev.iloc[1]) / rev.iloc[1] * 100.0)
+        except Exception:
+            pass
 
     # Debt/Equity
     de = info.get("debtToEquity")
     try:
         if de is not None:
             de = float(de)
-            if de > 10: de = de/100.0
-    except: de = None
+            if de > 10:  # sometimes %‑like
+                de = de / 100.0
+    except Exception:
+        de = None
     if de is None:
         try:
             bs = t.balance_sheet
             if bs is not None and not bs.empty:
-                total_debt = first_val(bs.iloc[:,0], ["Total Debt","Short Long Term Debt","Short/Long Term Debt","Total Liab"])
-                equity     = first_val(bs.iloc[:,0], ["Total Stockholder Equity","Total Shareholder Equity","Stockholders Equity"])
-                if total_debt is not None and equity not in (None,0):
-                    de = float(total_debt)/float(equity)
-        except: pass
+                total_debt = first_val(bs.iloc[:, 0], ["Total Debt","Short Long Term Debt","Short/Long Term Debt","Total Liab"])
+                equity     = first_val(bs.iloc[:, 0], ["Total Stockholder Equity","Total Shareholder Equity","Stockholders Equity"])
+                if total_debt is not None and equity not in (None, 0):
+                    de = float(total_debt) / float(equity)
+        except Exception:
+            pass
 
     # FCF & FCF Yield
     fcf = info.get("freeCashflow")
@@ -228,79 +276,75 @@ def fetch_snapshot(tk: str):
         try:
             cf = t.cashflow
             if cf is not None and not cf.empty:
-                ocf  = first_val(cf.iloc[:,0], ["Total Cash From Operating Activities","Operating Cash Flow"])
-                capx = first_val(cf.iloc[:,0], ["Capital Expenditures","Capital Expenditure"])
+                ocf  = first_val(cf.iloc[:, 0], ["Total Cash From Operating Activities","Operating Cash Flow"])
+                capx = first_val(cf.iloc[:, 0], ["Capital Expenditures","Capital Expenditure"])
                 if ocf is not None and capx is not None:
                     fcf = float(ocf) + float(capx)  # capex usually negative
-        except: pass
+        except Exception:
+            pass
     mktcap = info.get("marketCap")
-    fcfy = (float(fcf)/float(mktcap)*100.0) if (fcf and mktcap and mktcap>0) else None
+    fcfy = (float(fcf) / float(mktcap) * 100.0) if (fcf and mktcap and mktcap > 0) else None
 
     # Scores
     rev_s, de_s, peg_s, fcfy_s = s_rev(yoy), s_de(de), s_peg(peg), s_fcfy(fcfy)
 
-    # Moat (from sidebar sliders)
-    company_moat = moat_avg(brand, barriers, switching, network, scale)
+    # Moat (from sliders passed in)
+    b, ba, sw, ne, sc = (moat_inputs[k] for k in ["brand","barriers","switching","network","scale"])
+    moat_s = moat_avg(b, ba, sw, ne, sc)
     notes = "\n".join([
-        moat_note(name, "1) Brand & Pricing", brand),
-        moat_note(name, "2) Barriers to Entry", barriers),
-        moat_note(name, "3) Switching Costs", switching),
-        moat_note(name, "4) Network Effect", network),
-        moat_note(name, "5) Economies of Scale", scale),
+        moat_note(name, "1) Brand & Pricing", b),
+        moat_note(name, "2) Barriers to Entry", ba),
+        moat_note(name, "3) Switching Costs", sw),
+        moat_note(name, "4) Network Effect", ne),
+        moat_note(name, "5) Economies of Scale", sc),
     ])
 
-    total = total_score(rev_s, de_s, fcfy_s, peg_s, company_moat)
+    total = total_score(rev_s, de_s, fcfy_s, peg_s, moat_s)
 
     return {
         "Ticker": tk, "Company": name, "Price": price,
         "Revenue Growth YoY (%)": yoy, "Debt/Equity": de, "PEG Ratio": peg,
         "FCF ($)": fcf, "Market Cap ($)": mktcap, "FCF Yield (%)": fcfy,
         "Revenue Score": rev_s, "Debt Score": de_s, "PEG Score": peg_s, "FCF Yield Score": fcfy_s,
-        "Moat Subscores": f"{brand},{barriers},{switching},{network},{scale}",
-        "Moat Score": company_moat, "Moat Notes": notes,
+        "Moat Subscores": f"{b},{ba},{sw},{ne},{sc}",
+        "Moat Score": moat_s, "Moat Notes": notes,
         "Total Score": total,
         "Profile": f"https://finance.yahoo.com/quote/{tk}/profile"
     }
 
-# =============== Sidebar ===============
+# ==== 6) SIDEBAR (SLIDERS + FILTERS) =============================================
 st.sidebar.header("Economic Moat (subscores 0–10)")
 brand     = st.sidebar.slider("1) Brand & Pricing",    0, 10, 6)
 barriers  = st.sidebar.slider("2) Barriers to Entry",  0, 10, 7)
 switching = st.sidebar.slider("3) Switching Costs",    0, 10, 6)
 network   = st.sidebar.slider("4) Network Effect",     0, 10, 6)
 scale     = st.sidebar.slider("5) Economies of Scale", 0, 10, 8)
+MOAT_INPUTS = dict(brand=brand, barriers=barriers, switching=switching, network=network, scale=scale)
 
-# ---- Filters with enable checkboxes + AND/OR combiner ----
+# -- Per‑metric filters with checkboxes + AND/OR combiner
 st.sidebar.header("Filters (tick to enable)")
 mode = st.sidebar.radio("Combine filters using", ["AND", "OR"], horizontal=True)
 
 en_moat  = st.sidebar.checkbox("Filter by Moat score range", False)
-if en_moat:
-    flt_moat = st.sidebar.slider("Moat score range", 0.0, 10.0, (8.0, 10.0), 0.5)
+if en_moat:  flt_moat  = st.sidebar.slider("Moat score range", 0.0, 10.0, (8.0, 10.0), 0.5)
 
 en_total = st.sidebar.checkbox("Filter by Total score range", False)
-if en_total:
-    flt_total = st.sidebar.slider("Total score range", 0.0, 10.0, (7.0, 10.0), 0.5)
+if en_total: flt_total = st.sidebar.slider("Total score range", 0.0, 10.0, (7.0, 10.0), 0.5)
 
 en_rev   = st.sidebar.checkbox("Filter by Min Revenue Growth %", False)
-if en_rev:
-    flt_rev = st.sidebar.slider("Min Revenue Growth %", -50.0, 50.0, 10.0, 1.0)
+if en_rev:   flt_rev   = st.sidebar.slider("Min Revenue Growth %", -50.0, 50.0, 10.0, 1.0)
 
 en_peg   = st.sidebar.checkbox("Filter by Max PEG", False)
-if en_peg:
-    flt_peg = st.sidebar.slider("Max PEG", 0.0, 10.0, 2.0, 0.1)
+if en_peg:   flt_peg   = st.sidebar.slider("Max PEG", 0.0, 10.0, 2.0, 0.1)
 
 en_de    = st.sidebar.checkbox("Filter by Max Debt/Equity", False)
-if en_de:
-    flt_de = st.sidebar.slider("Max Debt/Equity", 0.0, 5.0, 1.0, 0.1)
+if en_de:    flt_de    = st.sidebar.slider("Max Debt/Equity", 0.0, 5.0, 1.0, 0.1)
 
 en_fcfy  = st.sidebar.checkbox("Filter by Min FCF Yield %", False)
-if en_fcfy:
-    flt_fcfy = st.sidebar.slider("Min FCF Yield %", -10.0, 20.0, 0.0, 0.5)
+if en_fcfy:  flt_fcfy  = st.sidebar.slider("Min FCF Yield %", -10.0, 20.0, 0.0, 0.5)
 
 en_price = st.sidebar.checkbox("Filter by Min Price ($)", False)
-if en_price:
-    flt_price = st.sidebar.slider("Min Price ($)", 0.0, 2000.0, 0.0, 1.0)
+if en_price: flt_price = st.sidebar.slider("Min Price ($)", 0.0, 2000.0, 0.0, 1.0)
 
 st.sidebar.divider()
 st.sidebar.header("Screener mode (S&P 500)")
@@ -311,30 +355,35 @@ max_peg  = st.sidebar.number_input("Screener: Max PEG", value=5.0, step=0.1)
 max_de   = st.sidebar.number_input("Screener: Max Debt/Equity", value=3.0, step=0.1)
 min_fcfy = st.sidebar.number_input("Screener: Min FCF Yield %", value=-5.0, step=0.5)
 
-# =============== Main input + Run =====
-defaults = "AAPL, MSFT, NVDA, AMZN, META, GOOGL, UNH, ANET, ARM, NFLX, PLTR"
+# ==== 7) MAIN INPUT + RUN ========================================================
+defaults  = "AAPL, MSFT, NVDA, AMZN, META, GOOGL, UNH, ANET, ARM, NFLX, PLTR"
 user_text = st.text_area("Enter tickers or company names (comma/space/newline)", defaults)
 
 typed = expand_input_to_tickers(user_text or defaults)
 universe = list(SP500["Ticker"]) if scan_all else typed
 if scan_all:
-    universe = sorted(set(universe).union(set(typed)))  # include typed extras
+    # also include anything typed by you
+    universe = sorted(set(universe).union(set(typed)))
 
 run = st.button("Run", type="primary")
 
-# =============== Execute ==============
+# ==== 8) EXECUTION ===============================================================
 if run:
     if not universe:
         st.warning("No valid tickers found. Try names (e.g., 'Palantir') or enable S&P scan.")
-    rows, prog = [], st.progress(0.0, text="Fetching...")
+
+    rows = []
+    prog = st.progress(0.0, text="Fetching...")
     for i, tk in enumerate(universe):
-        try: rows.append(fetch_snapshot(tk))
-        except Exception as e: st.warning(f"Fetch failed for {tk}: {e}")
-        prog.progress((i+1)/max(len(universe),1), text=f"Processed {i+1}/{len(universe)}")
+        try:
+            rows.append(fetch_snapshot(tk, MOAT_INPUTS))
+        except Exception as e:
+            st.warning(f"Fetch failed for {tk}: {e}")
+        prog.progress((i + 1) / max(len(universe), 1), text=f"Processed {i+1}/{len(universe)}")
 
     df = pd.DataFrame(rows)
 
-    # Screener pre-filter (only when scanning S&P)
+    # Screener pre-filter (used only when scanning the whole index)
     screener_ok = pd.Series(True, index=df.index)
     if scan_all:
         screener_ok = (
@@ -349,69 +398,68 @@ if run:
             df["FCF Yield (%)"].fillna(-1e9) >= float(min_fcfy)
         )
 
-  # ---- Checkbox-driven filters with AND/OR (no nonlocal) ----
-conds = []
-if en_moat:
-    conds.append(df["Moat Score"].fillna(0).between(flt_moat[0], flt_moat[1]))
-if en_total:
-    conds.append(df["Total Score"].fillna(0).between(flt_total[0], flt_total[1]))
-if en_rev:
-    conds.append(df["Revenue Growth YoY (%)"].fillna(-1e9) >= flt_rev)
-if en_peg:
-    conds.append(df["PEG Ratio"].fillna(1e9) <= flt_peg)
-if en_de:
-    conds.append(df["Debt/Equity"].fillna(1e9) <= flt_de)
-if en_fcfy:
-    conds.append(df["FCF Yield (%)"].fillna(-1e9) >= flt_fcfy)
-if en_price:
-    conds.append(df["Price"].fillna(-1e9) >= flt_price)
+    # Checkbox‑driven filters (AND/OR) — around here for patches
+    conds = []
+    if en_moat:   conds.append(df["Moat Score"].fillna(0).between(flt_moat[0], flt_moat[1]))
+    if en_total:  conds.append(df["Total Score"].fillna(0).between(flt_total[0], flt_total[1]))
+    if en_rev:    conds.append(df["Revenue Growth YoY (%)"].fillna(-1e9) >= flt_rev)
+    if en_peg:    conds.append(df["PEG Ratio"].fillna(1e9) <= flt_peg)
+    if en_de:     conds.append(df["Debt/Equity"].fillna(1e9) <= flt_de)
+    if en_fcfy:   conds.append(df["FCF Yield (%)"].fillna(-1e9) >= flt_fcfy)
+    if en_price:  conds.append(df["Price"].fillna(-1e9) >= flt_price)
 
-if not conds:
-    cond = pd.Series(True, index=df.index)  # nothing checked => keep all
-else:
-    cond = conds[0]
-    for c in conds[1:]:
-        cond = (cond & c) if mode == "AND" else (cond | c)
-
-    # If no checkbox selected, keep all
-    if not any([en_moat, en_total, en_rev, en_peg, en_de, en_fcfy, en_price]):
-        cond = pd.Series(True, index=df.index)
+    if not conds:
+        cond = pd.Series(True, index=df.index)  # nothing checked => keep all
+    else:
+        cond = conds[0]
+        for c in conds[1:]:
+            cond = (cond & c) if mode == "AND" else (cond | c)
 
     filt = (screener_ok if scan_all else pd.Series(True, index=df.index)) & cond
     df_f = df[filt].reset_index(drop=True)
 
-    # link column (ticker -> Yahoo profile)
+    # Link column (ticker -> Yahoo profile)
     df_f.insert(1, "Profile Link", df_f["Profile"])
-    colcfg = {"Profile Link": st.column_config.LinkColumn("Ticker (link)", help="Open Yahoo profile", display_text="→"),
-              "Profile": None}
+    colcfg = {
+        "Profile Link": st.column_config.LinkColumn("Ticker (link)", help="Open Yahoo profile", display_text="→"),
+        "Profile": None  # hide raw URL
+    }
 
     st.subheader("Filtered Results")
-    st.dataframe(df_f.drop(columns=[c for c in ["Profile"] if c in df_f.columns]),
-                 use_container_width=True, height=520, column_config=colcfg)
+    st.dataframe(
+        df_f.drop(columns=[c for c in ["Profile"] if c in df_f.columns]),
+        use_container_width=True, height=520, column_config=colcfg
+    )
     st.caption(f"Showing {len(df_f)} of {len(df)} rows")
 
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button("Download FILTERED (Excel)", excel_bytes(df_f,"Filtered"),
-                           "bullstock_filtered.xlsx",
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        st.download_button("Download FILTERED (CSV)", df_f.to_csv(index=False).encode("utf-8"),
-                           "bullstock_filtered.csv","text/csv")
+        st.download_button("Download FILTERED (Excel)",
+            data=excel_bytes(df_f, "Filtered"),
+            file_name="bullstock_filtered.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Download FILTERED (CSV)",
+            data=df_f.to_csv(index=False).encode("utf-8"),
+            file_name="bullstock_filtered.csv", mime="text/csv")
     with c2:
-        st.download_button("Download ALL (Excel)", excel_bytes(df,"All"),
-                           "bullstock_all.xlsx",
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        st.download_button("Download ALL (CSV)", df.to_csv(index=False).encode("utf-8"),
-                           "bullstock_all.csv","text/csv")
+        st.download_button("Download ALL (Excel)",
+            data=excel_bytes(df, "All"),
+            file_name="bullstock_all.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Download ALL (CSV)",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name="bullstock_all.csv", mime="text/csv")
 
     with st.expander("Appendix: Scoring Rules"):
         st.markdown(
-            "- Revenue Growth YoY (0–10): >20%→10, >10%→8, >5%→6, >0%→4, else 0.\n"
-            "- Debt/Equity (0–10, lower better): <0.5→10, <1.0→7, <2.0→4, else 0.\n"
-            "- PEG (0–10, lower better): <1→10, <2→6, <3→3, else 0; **missing PEG = neutral 5** (with fallback calc).\n"
-            "- FCF Yield (0–10, higher better): >8%→10, >5%→8, >3%→6, >1%→4, >0%→2, else 0.\n"
-            "- Moat: weighted avg (Brand 1.0, Barriers 1.25, Switching 1.0, Network 0.75, Scale 1.25) with narrative notes.\n"
-            "- Total Score: equal‑weighted average of Revenue, D/E, FCF‑Yield, PEG, and Moat."
+            "- **Revenue Growth YoY (0–10):** >20%→10, >10%→8, >5%→6, >0%→4, else 0.\n"
+            "- **Debt/Equity (0–10, lower better):** <0.5→10, <1.0→7, <2.0→4, else 0.\n"
+            "- **PEG (0–10, lower better):** <1→10, <2→6, <3→3, else 0; missing PEG = **neutral 5** (with fallback calc).\n"
+            "- **FCF Yield (0–10, higher better):** >8%→10, >5%→8, >3%→6, >1%→4, >0%→2, else 0.\n"
+            "- **Moat:** weighted avg (Brand 1.0, Barriers 1.25, Switching 1.0, Network 0.75, Scale 1.25) with narrative notes.\n"
+            "- **Total Score:** equal‑weighted average of Revenue, D/E, FCF‑Yield, PEG, and Moat."
         )
 else:
     st.info("Type names/tickers (e.g., ‘Palantir’ or ‘PLTR’) or enable ‘Scan entire S&P 500’, then press Run.")
+# ============================== END FILE =========================================
+
