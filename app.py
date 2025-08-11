@@ -252,4 +252,4 @@ if run:
 """)
 
 else:
-    st.info("Enter tickers, set moat subscores (sidebar), then press **Run**.") on
+    st.info("Enter tickers, set moat subscores (sidebar), then press **Run**.") ok
