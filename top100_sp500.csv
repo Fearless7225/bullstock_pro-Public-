@@ -1,0 +1,100 @@
+Ticker,Company,MarketCap_BillionsUSD
+AAPL,Apple Inc.,2900
+MSFT,Microsoft Corp.,2800
+GOOGL,Alphabet Inc. Class A,1900
+GOOG,Alphabet Inc. Class C,1900
+AMZN,Amazon.com Inc.,1800
+NVDA,NVIDIA Corp.,1700
+META,Meta Platforms Inc. Class A,1100
+BRK.B,Berkshire Hathaway Inc. Class B,860
+LLY,Eli Lilly and Co.,820
+TSLA,Tesla Inc.,800
+V,Visa Inc. Class A,550
+JPM,JPMorgan Chase & Co.,530
+UNH,UnitedHealth Group Inc.,510
+MA,Mastercard Inc. Class A,480
+XOM,Exxon Mobil Corp.,470
+PG,Procter & Gamble Co.,460
+JNJ,Johnson & Johnson,440
+HD,Home Depot Inc.,390
+AVGO,Broadcom Inc.,380
+MRK,Merck & Co. Inc.,350
+CVX,Chevron Corp.,340
+ABBV,AbbVie Inc.,320
+PEP,PepsiCo Inc.,300
+KO,Coca-Cola Co.,290
+PFE,Pfizer Inc.,280
+COST,Costco Wholesale Corp.,270
+ADBE,Adobe Inc.,260
+WMT,Walmart Inc.,250
+ORCL,Oracle Corp.,240
+MCD,McDonald's Corp.,230
+CSCO,Cisco Systems Inc.,220
+NFLX,Netflix Inc.,210
+DHR,Danaher Corp.,200
+LIN,Linde plc,200
+BMY,Bristol-Myers Squibb Co.,190
+ACN,Accenture plc Class A,190
+TXN,Texas Instruments Inc.,180
+AMD,Advanced Micro Devices Inc.,170
+PM,Philip Morris International Inc.,160
+HON,Honeywell International Inc.,150
+NEE,NextEra Energy Inc.,150
+INTC,Intel Corp.,140
+AMGN,Amgen Inc.,140
+UNP,Union Pacific Corp.,130
+UPS,United Parcel Service Inc. Class B,130
+GS,Goldman Sachs Group Inc.,120
+CAT,Caterpillar Inc.,120
+RTX,RTX Corp.,110
+LOW,Lowe's Companies Inc.,110
+SPGI,S&P Global Inc.,105
+AXP,American Express Co.,105
+BA,Boeing Co.,100
+INTU,Intuit Inc.,100
+BLK,BlackRock Inc.,95
+SCHW,Charles Schwab Corp.,95
+TMO,Thermo Fisher Scientific Inc.,95
+PLD,Prologis Inc.,90
+DE,Deere & Co.,90
+MS,Morgan Stanley,88
+ISRG,Intuitive Surgical Inc.,88
+AMAT,Applied Materials Inc.,85
+ADP,Automatic Data Processing Inc.,85
+BKNG,Booking Holdings Inc.,84
+C,Citigroup Inc.,83
+MDLZ,Mondelez International Inc. Class A,82
+VRTX,Vertex Pharmaceuticals Inc.,82
+T,AT&T Inc.,80
+NOW,ServiceNow Inc.,80
+PYPL,PayPal Holdings Inc.,78
+GE,General Electric Co.,78
+EQIX,Equinix Inc.,77
+CI,Cigna Group,77
+MMC,Marsh & McLennan Cos.,75
+ELV,Elevance Health Inc.,75
+MO,Altria Group Inc.,73
+KLAC,KLA Corp.,72
+LRCX,Lam Research Corp.,72
+CB,Chubb Ltd.,71
+SO,Southern Co.,70
+PGR,Progressive Corp.,70
+REGN,Regeneron Pharmaceuticals Inc.,69
+ABT,Abbott Laboratories,69
+SLB,Schlumberger NV,68
+APD,Air Products and Chemicals Inc.,68
+ITW,Illinois Tool Works Inc.,67
+MU,Micron Technology Inc.,67
+SHW,Sherwin-Williams Co.,66
+CL,Colgate-Palmolive Co.,66
+DUK,Duke Energy Corp.,65
+EOG,EOG Resources Inc.,65
+FDX,FedEx Corp.,64
+PSA,Public Storage,64
+HUM,Humana Inc.,63
+EMR,Emerson Electric Co.,63
+GD,General Dynamics Corp.,62
+NKE,Nike Inc. Class B,62
+MAR,Marriott International Inc. Class A,61
+ROP,Roper Technologies Inc.,61
+AON,Aon plc Class A,60
