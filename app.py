@@ -1,12 +1,14 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import yfinance as yf
 import re
 from io import BytesIO
+from rapidfuzz import process, fuzz
 
 # ---------------- Page ----------------
 st.set_page_config(page_title="BullStock", layout="wide")
-st.title("BullStock — Moat + Financial Screener")
+st.title("BullStock — Moat + Financial Screener (S&P 500)")
 
 # ---------------- Helpers ----------------
 def excel_bytes(df: pd.DataFrame, sheet="Sheet1") -> bytes:
@@ -23,17 +25,77 @@ def safe_price(tkr: yf.Ticker):
     info = tkr.info or {}
     p = info.get("currentPrice")
     if p is not None:
-        try:
-            return float(p)
-        except Exception:
-            pass
+        try: return float(p)
+        except: pass
     try:
         h = tkr.history(period="1d")
-        if not h.empty:
-            return float(h["Close"].iloc[-1])
+        if not h.empty: return float(h["Close"].iloc[-1])
+    except: pass
+    return None
+
+# ---------------- S&P 500 universe & resolver ----------------
+@st.cache_data
+def load_sp500() -> pd.DataFrame:
+    # 1) Local CSV if provided: data/sp500.csv with columns Ticker,Company
+    try:
+        df = pd.read_csv("data/sp500.csv").dropna()
+        df["Ticker"] = df["Ticker"].str.upper().str.strip()
+        df["Company"] = df["Company"].str.strip()
+        if not df.empty:
+            return df[["Ticker","Company"]]
     except Exception:
         pass
-    return None
+    # 2) Try yfinance helper
+    try:
+        tickers = yf.tickers_sp500()  # returns list of symbols
+        if tickers:
+            # We won’t have names; fill names as ticker for fuzzy match baseline
+            return pd.DataFrame({"Ticker": [t.upper() for t in tickers],
+                                 "Company": [t.upper() for t in tickers]})
+    except Exception:
+        pass
+    # 3) Minimal built-in fallback so app still works
+    fallback = [
+        ("AAPL","Apple Inc."), ("MSFT","Microsoft Corporation"),
+        ("NVDA","NVIDIA Corporation"), ("AMZN","Amazon.com, Inc."),
+        ("META","Meta Platforms, Inc."), ("GOOGL","Alphabet Inc. (Class A)"),
+        ("UNH","UnitedHealth Group Incorporated"), ("ANET","Arista Networks, Inc."),
+        ("ARM","Arm Holdings plc"), ("NFLX","Netflix, Inc.")
+    ]
+    return pd.DataFrame(fallback, columns=["Ticker","Company"])
+
+SP500 = load_sp500()
+_ALL_TICKERS = set(SP500["Ticker"])
+_NAME_TO_TICKER = {row.Company.upper(): row.Ticker for row in SP500.itertuples()}
+
+def name_to_ticker(user_text: str) -> str | None:
+    """Intelligent resolver: name or ticker -> S&P ticker."""
+    if not user_text: return None
+    raw = user_text.upper().strip()
+    if raw in _ALL_TICKERS:
+        return raw
+    choices = list(_NAME_TO_TICKER.keys())
+    if choices:
+        match, score, _ = process.extractOne(raw, choices, scorer=fuzz.WRatio)
+        if score >= 85:
+            return _NAME_TO_TICKER.get(match)
+    cleaned = clean_ticker(raw)
+    return cleaned if cleaned else None
+
+def expand_input_to_tickers(text: str) -> list[str]:
+    if not text.strip():
+        return []
+    toks = re.split(r"[,\n;| ]+", text.strip())
+    out = []
+    for t in toks:
+        tk = name_to_ticker(t)
+        if tk: out.append(tk)
+    # uniq, keep order
+    seen = set(); dedup = []
+    for x in out:
+        if x not in seen:
+            seen.add(x); dedup.append(x)
+    return dedup
 
 # ---------------- Scoring (0–10; missing -> 0) ----------------
 def s_rev(y):
@@ -53,33 +115,45 @@ def s_de(x):
 
 def s_peg(p):
     if p is None or pd.isna(p): return 0
-    if p < 1: return 10
-    if p < 2: return 6
-    if p < 3: return 3
+    if p < 1:  return 10
+    if p < 2:  return 6
+    if p < 3:  return 3
     return 0
 
 def s_fcfy(y):
     if y is None or pd.isna(y): return 0
-    if y > 8: return 10
-    if y > 5: return 8
-    if y > 3: return 6
-    if y > 1: return 4
-    if y > 0: return 2
+    if y > 8:  return 10
+    if y > 5:  return 8
+    if y > 3:  return 6
+    if y > 1:  return 4
+    if y > 0:  return 2
     return 0
 
-def moat_avg(b, r, s, n, e):
-    return round((b + r + s + n + e) / 5.0, 2)
+def moat_avg(brand, barriers, switching, network, scale):
+    # Adam Khoo–style emphasis: heavier weight on Barriers & Scale
+    w = [1.0, 1.25, 1.0, 0.75, 1.25]
+    v = [brand, barriers, switching, network, scale]
+    return round(sum(vi*wi for vi,wi in zip(v,w)) / sum(w), 2)
 
 def moat_note(name, label, score):
-    if score >= 9: txt = "Exceptional and durable."
-    elif score >= 7: txt = "Strong but not absolute."
-    elif score >= 5: txt = "Moderate; contested."
-    elif score >= 3: txt = "Weak; easily matched."
-    else: txt = "Minimal; commoditized."
-    return f"{label}: {score}/10 — {txt} ({name})."
+    # Longer narrative bands inspired by your reference
+    if score >= 9:
+        nuance = ("Dominant scale and regulatory/contract entrenchment; data and distribution flywheels "
+                  "support pricing and returns likely to persist a decade+.")
+    elif score >= 7:
+        nuance = ("Clear, defendable advantages (cost curve, data, compliance, distribution). "
+                  "Well‑funded rivals can narrow the gap but replication is hard.")
+    elif score >= 5:
+        nuance = ("Advantages exist but face credible substitutes; tech or policy shifts can compress margins; "
+                  "returns depend on continuous execution.")
+    elif score >= 3:
+        nuance = ("Some differentiation but low entry frictions; bargaining power sits with customers/suppliers; "
+                  "excess returns difficult to sustain.")
+    else:
+        nuance = ("Commodity dynamics with little pricing power; reinvestment does not create durable edge.")
+    return f"{label}: {score}/10 — {nuance} ({name})."
 
 def total_score(rev_s, de_s, fcfy_s, peg_s, moat_s):
-    # equal weights; all components are numbers (0–10)
     return round((rev_s + de_s + fcfy_s + peg_s + moat_s) / 5.0, 2)
 
 # ---------------- Data fetch ----------------
@@ -102,9 +176,8 @@ def fetch_metrics(tk: str):
     if info.get("revenueGrowth") is not None:
         try:
             rg = float(info["revenueGrowth"])
-            yoy = rg * 100 if abs(rg) <= 1 else rg
-        except Exception:
-            pass
+            yoy = rg*100 if abs(rg) <= 1 else rg
+        except: pass
     if yoy is None:
         try:
             inc = t.financials
@@ -114,28 +187,25 @@ def fetch_metrics(tk: str):
                     rev = inc.loc[k[0]].dropna()
                     if len(rev) >= 2 and float(rev.iloc[1]) != 0:
                         yoy = float((rev.iloc[0] - rev.iloc[1]) / rev.iloc[1] * 100.0)
-        except Exception:
-            pass
+        except: pass
 
     # Debt/Equity
     de = info.get("debtToEquity")
     try:
         if de is not None:
             de = float(de)
-            if de > 10:  # Yahoo sometimes returns percent-like numbers
+            if de > 10:  # sometimes percent-like
                 de = de / 100.0
-    except Exception:
-        de = None
+    except: de = None
     if de is None:
         try:
             bs = t.balance_sheet
             if bs is not None and not bs.empty:
-                total_debt = first_val(bs.iloc[:, 0], ["Total Debt", "Short Long Term Debt", "Short/Long Term Debt", "Total Liab"])
-                equity = first_val(bs.iloc[:, 0], ["Total Stockholder Equity", "Total Shareholder Equity", "Stockholders Equity"])
+                total_debt = first_val(bs.iloc[:,0], ["Total Debt","Short Long Term Debt","Short/Long Term Debt","Total Liab"])
+                equity     = first_val(bs.iloc[:,0], ["Total Stockholder Equity","Total Shareholder Equity","Stockholders Equity"])
                 if total_debt is not None and equity not in (None, 0):
                     de = float(total_debt) / float(equity)
-        except Exception:
-            pass
+        except: pass
 
     # FCF yield
     fcf = info.get("freeCashflow")
@@ -143,32 +213,22 @@ def fetch_metrics(tk: str):
         try:
             cf = t.cashflow
             if cf is not None and not cf.empty:
-                ocf = first_val(cf.iloc[:, 0], ["Total Cash From Operating Activities", "Operating Cash Flow"])
-                capex = first_val(cf.iloc[:, 0], ["Capital Expenditures", "Capital Expenditure"])
+                ocf = first_val(cf.iloc[:,0], ["Total Cash From Operating Activities","Operating Cash Flow"])
+                capex = first_val(cf.iloc[:,0], ["Capital Expenditures","Capital Expenditure"])
                 if ocf is not None and capex is not None:
                     fcf = float(ocf) + float(capex)  # capex usually negative
-        except Exception:
-            pass
+        except: pass
     mktcap = info.get("marketCap")
     fcfy = (float(fcf) / float(mktcap) * 100.0) if (fcf and mktcap and mktcap > 0) else None
 
     return {
-        "Ticker": tk,
-        "Company": name,
-        "Price": price,
-        "Revenue Growth YoY (%)": yoy,
-        "Debt/Equity": de,
-        "PEG Ratio": peg,
-        "FCF ($)": fcf,
-        "Market Cap ($)": mktcap,
+        "Ticker": tk, "Company": name, "Price": price,
+        "Revenue Growth YoY (%)": yoy, "Debt/Equity": de,
+        "PEG Ratio": peg, "FCF ($)": fcf, "Market Cap ($)": mktcap,
         "FCF Yield (%)": fcfy
     }
 
 # ---------------- UI ----------------
-defaults = "AAPL, MSFT, NVDA, AMZN, META, GOOGL, UNH, ANET, ARM, NFLX"
-tickers_text = st.text_area("Tickers (comma or space separated)", defaults)
-tickers = [clean_ticker(t) for t in re.split(r"[,\s]+", tickers_text.strip()) if t]
-
 st.sidebar.header("Economic Moat (subscores 0–10)")
 brand   = st.sidebar.slider("1) Brand & Pricing", 0, 10, 6)
 barrier = st.sidebar.slider("2) Barriers to Entry", 0, 10, 7)
@@ -185,9 +245,20 @@ flt_rev   = st.sidebar.slider("Min Rev Growth %", -50.0, 50.0, -50.0, 1.0)
 flt_de    = st.sidebar.slider("Max Debt/Equity", 0.0, 3.0, 3.0, 0.1)
 flt_fcfy  = st.sidebar.slider("Min FCF Yield %", -5.0, 15.0, -5.0, 0.5)
 
+st.sidebar.header("Screener mode")
+use_sp500 = st.sidebar.checkbox("Scan entire S&P 500", value=False)
+min_moat  = st.sidebar.slider("Screener: Min Moat", 0.0, 10.0, 8.0, 0.5)
+min_rev   = st.sidebar.number_input("Screener: Min Revenue Growth %", value=23.0, step=1.0)
+
+defaults = "AAPL, MSFT, NVDA, AMZN, META, GOOGL, UNH, ANET, ARM, NFLX"
+user_text = st.text_area("Enter tickers or company names (comma/space/newline separated)", defaults)
+tickers = list(SP500["Ticker"]) if use_sp500 else expand_input_to_tickers(user_text or defaults)
+
 run = st.button("Run")
 
 if run:
+    if not tickers:
+        st.warning("No valid tickers found. Try typing company names (e.g., 'UnitedHealth') or enable Scan entire S&P 500.")
     rows = []
     prog = st.progress(0.0, text="Fetching...")
     for i, tk in enumerate(tickers):
@@ -209,20 +280,24 @@ if run:
 
         rows.append({
             **m,
-            "Revenue Score": rev_s,
-            "Debt Score": de_s,
-            "PEG Score": peg_s,
-            "FCF Yield Score": fcfy_s,
+            "Revenue Score": rev_s, "Debt Score": de_s,
+            "PEG Score": peg_s, "FCF Yield Score": fcfy_s,
             "Moat Subscores": f"{brand},{barrier},{switch},{network},{scale}",
-            "Moat Score": moat_s,
-            "Moat Notes": notes,
+            "Moat Score": moat_s, "Moat Notes": notes,
             "Total Score": total
         })
-        prog.progress((i + 1) / len(tickers), text=f"Processed {i + 1}/{len(tickers)}")
+        prog.progress((i + 1) / max(len(tickers),1), text=f"Processed {i + 1}/{len(tickers)}")
 
     df = pd.DataFrame(rows)
 
-    # -------- NaN-friendly filters (NaNs pass metric filters) --------
+    # Screener pre-filter (lets NaN pass if screen is off)
+    screener_ok = pd.Series(True, index=df.index)
+    if use_sp500:
+        moat_ok_s   = df["Moat Score"].fillna(0) >= float(min_moat)
+        rev_ok_s    = df["Revenue Growth YoY (%)"].fillna(-1e9) >= float(min_rev)
+        screener_ok = moat_ok_s & rev_ok_s
+
+    # NaN-friendly filters
     peg_ok   = df["PEG Ratio"].isna() | (df["PEG Ratio"] <= flt_peg)
     rev_ok   = df["Revenue Growth YoY (%)"].isna() | (df["Revenue Growth YoY (%)"] >= flt_rev)
     de_ok    = df["Debt/Equity"].isna() | (df["Debt/Equity"] <= flt_de)
@@ -230,40 +305,30 @@ if run:
     moat_ok  = df["Moat Score"].fillna(0).between(flt_moat[0], flt_moat[1])
     total_ok = df["Total Score"].fillna(0).between(flt_total[0], flt_total[1])
 
-    filt = moat_ok & total_ok & peg_ok & rev_ok & de_ok & fcfy_ok
+    filt = screener_ok & moat_ok & total_ok & peg_ok & rev_ok & de_ok & fcfy_ok
     df_f = df[filt].reset_index(drop=True)
 
     st.subheader("Filtered Results")
-    st.dataframe(df_f, use_container_width=True, height=420)
+    st.dataframe(df_f, use_container_width=True, height=440)
     st.caption(f"Showing {len(df_f)} of {len(df)} rows")
 
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button(
-            "Download FILTERED (Excel)",
+        st.download_button("Download FILTERED (Excel)",
             data=excel_bytes(df_f, "Filtered"),
             file_name="bullstock_filtered.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        st.download_button(
-            "Download FILTERED (CSV)",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Download FILTERED (CSV)",
             data=df_f.to_csv(index=False).encode("utf-8"),
-            file_name="bullstock_filtered.csv",
-            mime="text/csv"
-        )
+            file_name="bullstock_filtered.csv", mime="text/csv")
     with c2:
-        st.download_button(
-            "Download ALL (Excel)",
+        st.download_button("Download ALL (Excel)",
             data=excel_bytes(df, "All"),
             file_name="bullstock_all.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        st.download_button(
-            "Download ALL (CSV)",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Download ALL (CSV)",
             data=df.to_csv(index=False).encode("utf-8"),
-            file_name="bullstock_all.csv",
-            mime="text/csv"
-        )
+            file_name="bullstock_all.csv", mime="text/csv")
 
     with st.expander("Appendix: Scoring Rules"):
         st.markdown(
@@ -271,12 +336,12 @@ if run:
             "- Debt/Equity (0–10, lower better): <0.5→10, <1.0→7, <2.0→4, else 0.\n"
             "- PEG (0–10, lower better): <1→10, <2→6, <3→3, else 0.\n"
             "- FCF Yield (0–10, higher better): >8%→10, >5%→8, >3%→6, >1%→4, >0%→2, else 0.\n"
-            "- Economic Moat (avg of 5 subs): Brand & Pricing, Barriers, Switching, Network, Scale.\n"
-            "- Total Score: equal-weighted average of the four metrics plus moat."
+            "- Moat: weighted average (Brand 1.0, Barriers 1.25, Switching 1.0, Network 0.75, Scale 1.25) with Adam‑Khoo‑style notes.\n"
+            "- Total Score: equal‑weighted average of the four metrics plus moat."
         )
 
     with st.expander("Raw fetched rows (debug)"):
-        st.dataframe(df, use_container_width=True, height=280)
+        st.dataframe(df, use_container_width=True, height=300)
 
 else:
-    st.info("Enter tickers, set moat subscores on the left, then press Run.")
+    st.info("Type company names or tickers, or enable 'Scan entire S&P 500', then press Run.")
