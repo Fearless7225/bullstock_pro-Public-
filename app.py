@@ -349,3 +349,5 @@ max_de   = st.sidebar.number_input("Screener: Max Debt/Equity", value=3.0, step=
 min_fcfy = st.sidebar.number_input("Screener: Min FCF Yield %", value=-5.0, step=0.5)
 defaults = "AAPL, MSFT, NVDA, AMZN, META, GOOGL, UNH, ANET, ARM, NFLX, PLTR"
 user_text = st.text_area("Enter tickers or company names (comma/space/newline)", defaults)
+else:
+    st.info("Type names or tickers (e.g., ‘Palantir’ or ‘PLTR’) or enable ‘Scan entire S&P 500’, then press Run.")
