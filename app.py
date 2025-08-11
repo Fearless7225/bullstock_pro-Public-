@@ -325,5 +325,25 @@ def fetch_snapshot(tk: str):
 
 # ---------------- Sidebar controls ----------------
 st.sidebar.header("Economic Moat (subscores 0–10)")
-brand    = st.sidebar.slider("1) Brand & Pricing", 0, 10, 6)
-barriers
+brand     = st.sidebar.slider("1) Brand & Pricing",      0, 10, 6)
+barriers  = st.sidebar.slider("2) Barriers to Entry",    0, 10, 7)
+switching = st.sidebar.slider("3) Switching Costs",      0, 10, 6)
+network   = st.sidebar.slider("4) Network Effect",       0, 10, 6)
+scale     = st.sidebar.slider("5) Economies of Scale",   0, 10, 8)
+
+st.sidebar.header("Filters")
+flt_moat  = st.sidebar.slider("Moat score range", 0.0, 10.0, (0.0, 10.0), 0.5)
+flt_total = st.sidebar.slider("Total score range", 0.0, 10.0, (0.0, 10.0), 0.5)
+flt_rev   = st.sidebar.slider("Min Revenue Growth %", -50.0, 50.0, -50.0, 1.0)
+flt_peg   = st.sidebar.slider("Max PEG", 0.0, 10.0, 10.0, 0.1)
+flt_de    = st.sidebar.slider("Max Debt/Equity", 0.0, 5.0, 5.0, 0.1)
+flt_fcfy  = st.sidebar.slider("Min FCF Yield %", -10.0, 20.0, -10.0, 0.5)
+flt_price = st.sidebar.slider("Min Price ($)", 0.0, 2000.0, 0.0, 1.0)
+
+st.sidebar.header("Screener mode (S&P 500)")
+scan_all = st.sidebar.checkbox("Scan entire S&P 500", value=False)
+min_moat = st.sidebar.slider("Screener: Min Moat", 0.0, 10.0, 8.0, 0.5)
+min_rev  = st.sidebar.number_input("Screener: Min Revenue Growth %", value=23.0, step=1.0)
+max_peg  = st.sidebar.number_input("Screener: Max PEG", value=5.0, step=0.1)
+max_de   = st.sidebar.number_input("Screener: Max Debt/Equity", value=3.0, step=0.1)
+min_fcfy = st.sidebar.number_input("Screener: Min FCF Yield %", value=-5.0, step=0.5)
