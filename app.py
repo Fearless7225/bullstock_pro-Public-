@@ -211,16 +211,19 @@ if run:
 
     df = pd.DataFrame(rows)
 
-    filt = (
-        df["Moat Score"].fillna(0).between(flt_moat[0], flt_moat[1]) &
-        df["Total Score"].fillna(0).between(flt_total[0], flt_total[1]) &
-        (df["PEG Ratio"].fillna(9999) <= flt_peg) &
-        (df["Revenue Growth YoY (%)"].fillna(-9999) >= flt_rev) &
-        (df["Debt/Equity"].fillna(9999) <= flt_de) &
-        (df["FCF Yield (%)"].fillna(-9999) >= flt_fcfy)
-    )
-    df_f = df[filt].reset_index(drop=True)
+    # Apply filters (NaNs pass the metric filters)
+peg_ok   = df["PEG Ratio"].isna() | (df["PEG Ratio"] <= flt_peg)
+rev_ok   = df["Revenue Growth YoY (%)"].isna() | (df["Revenue Growth YoY (%)"] >= flt_rev)
+de_ok    = df["Debt/Equity"].isna() | (df["Debt/Equity"] <= flt_de)
+fcfy_ok  = df["FCF Yield (%)"].isna() | (df["FCF Yield (%)"] >= flt_fcfy)
+moat_ok  = df["Moat Score"].fillna(0).between(flt_moat[0], flt_moat[1])
+total_ok = df["Total Score"].fillna(0).between(flt_total[0], flt_total[1])
 
+filt = moat_ok & total_ok & peg_ok & rev_ok & de_ok & fcfy_ok
+df_f = df[filt].reset_index(drop=True)
+st.caption(f"Showing {len(df_f)} of {len(df)} rows")
+with st.expander("Raw fetched rows (debug)"):
+    st.dataframe(df, use_container_width=True, height=280)
     st.subheader("Filtered Results")
     st.dataframe(df_f, use_container_width=True, height=420)
 
