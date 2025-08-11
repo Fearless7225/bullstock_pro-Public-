@@ -383,20 +383,28 @@ if run:
 
     df = pd.DataFrame(rows)
 
-    # Screener pre-filter (used only when scanning the whole index)
-    screener_ok = pd.Series(True, index=df.index)
-    if scan_all:
-        screener_ok = (
-            df["Moat Score"].fillna(0) >= float(min_moat)
-        ) & (
-            df["Revenue Growth YoY (%)"].fillna(-1e9) >= float(min_rev)
-        ) & (
-            df["PEG Ratio"].fillna(1e9) <= float(max_peg)
-        ) & (
-            df["Debt/Equity"].fillna(1e9) <= float(max_de)
-        ) & (
-            df["FCF Yield (%)"].fillna(-1e9) >= float(min_fcfy)
-        )
+   # Screener pre-filter (used only when scanning S&P) — AND/OR with enable flags
+screener_ok = pd.Series(True, index=df.index)
+if scan_all:
+    sc_conds = []
+
+    if en_sc_moat:
+        sc_conds.append(df["Moat Score"].fillna(0) >= float(sc_min_moat))
+    if en_sc_rev:
+        sc_conds.append(df["Revenue Growth YoY (%)"].fillna(-1e9) >= float(sc_min_rev))
+    if en_sc_peg:
+        sc_conds.append(df["PEG Ratio"].fillna(1e9) <= float(sc_max_peg))
+    if en_sc_de:
+        sc_conds.append(df["Debt/Equity"].fillna(1e9) <= float(sc_max_de))
+    if en_sc_fcfy:
+        sc_conds.append(df["FCF Yield (%)"].fillna(-1e9) >= float(sc_min_fcfy))
+
+    if not sc_conds:
+        screener_ok = pd.Series(True, index=df.index)  # nothing enabled -> keep all
+    else:
+        screener_ok = sc_conds[0]
+        for c in sc_conds[1:]:
+            screener_ok = (screener_ok & c) if sc_mode == "AND" else (screener_ok | c)
 
     # Checkbox‑driven filters (AND/OR) — around here for patches
     conds = []
