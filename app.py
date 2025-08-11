@@ -5,11 +5,11 @@ import yfinance as yf
 import re
 from io import BytesIO
 
-# ---------------- Page ----------------
+# ================== Page ==================
 st.set_page_config(page_title="BullStock", layout="wide")
 st.title("BullStock — Moat + Financial Screener (S&P 500)")
 
-# ---------------- Helpers ----------------
+# ================== Helpers ==================
 def excel_bytes(df: pd.DataFrame, sheet="Sheet1") -> bytes:
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
@@ -24,38 +24,29 @@ def safe_price(tkr: yf.Ticker):
     info = tkr.info or {}
     p = info.get("currentPrice")
     if p is not None:
-        try:
-            return float(p)
-        except Exception:
-            pass
+        try: return float(p)
+        except: pass
     try:
         h = tkr.history(period="1d")
-        if not h.empty:
-            return float(h["Close"].iloc[-1])
-    except Exception:
-        pass
+        if not h.empty: return float(h["Close"].iloc[-1])
+    except: pass
     return None
 
-# -------- PEG fallbacks (so PEG isn't always missing) --------
+# ---- PEG fallbacks (so PEG isn’t often missing) ----
 def _eps_cagr_from_financials(tkr: yf.Ticker, info: dict) -> float | None:
-    """Try to derive multi‑year EPS CAGR from Yahoo financials (returns decimal, e.g. 0.18)."""
+    """Return EPS CAGR as decimal (0.18 for 18%) if derivable, else None."""
     try:
         inc = tkr.financials
-        if inc is None or inc.empty:
-            return None
+        if inc is None or inc.empty: return None
 
-        # Try EPS row first
         eps_rows = [r for r in inc.index if "eps" in r.lower()]
         if eps_rows:
             s = inc.loc[eps_rows[0]].dropna()
             if len(s) >= 2:
-                v0 = float(s.iloc[-1])  # oldest
-                vN = float(s.iloc[0])   # latest
-                n = len(s) - 1
+                v0 = float(s.iloc[-1]); vN = float(s.iloc[0]); n = len(s) - 1
                 if v0 > 0 and vN > 0 and n > 0:
                     return (vN / v0) ** (1 / n) - 1
 
-        # Fallback: Net Income / sharesOutstanding
         ni_rows = [r for r in inc.index if "net income" in r.lower()]
         so = info.get("sharesOutstanding")
         if ni_rows and so and so > 0:
@@ -66,103 +57,87 @@ def _eps_cagr_from_financials(tkr: yf.Ticker, info: dict) -> float | None:
                 n = len(s) - 1
                 if v0 > 0 and vN > 0 and n > 0:
                     return (vN / v0) ** (1 / n) - 1
-    except Exception:
+    except:  # noqa: E722
         pass
     return None
 
 def _fallback_peg(tkr: yf.Ticker, price: float | None, info: dict) -> float | None:
     """
-    Compute PEG if Yahoo's pegRatio is missing.
-    PEG = (P/E) / (EPS CAGR in %) using trailingPE or forward EPS.
+    PEG = (P/E) / (EPS CAGR in %) using trailingPE or price/forwardEps.
     """
     pe = info.get("trailingPE")
     if pe is None and price is not None:
         fwd_eps = info.get("forwardEps")
         if fwd_eps:
-            try:
-                pe = float(price) / float(fwd_eps)
-            except Exception:
-                pe = None
-
-    g = _eps_cagr_from_financials(tkr, info)  # decimal, e.g. 0.18 for 18%
+            try: pe = float(price) / float(fwd_eps)
+            except: pe = None
+    g = _eps_cagr_from_financials(tkr, info)  # decimal (0.18)
     if pe and g and g > 0:
-        try:
-            return float(pe) / (float(g) * 100.0)  # divide by growth in %
-        except Exception:
-            return None
+        try: return float(pe) / (float(g) * 100.0)
+        except: return None
     return None
 
-# ---------------- S&P 500 universe ----------------
+# ================== S&P500 universe ==================
 @st.cache_data
 def load_sp500() -> pd.DataFrame:
-    # Try Wikipedia (tickers + names)
     try:
         tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
         for t in tables:
             cols = {c.lower(): c for c in t.columns}
             if "symbol" in cols and ("security" in cols or "company" in cols):
-                symcol = cols["symbol"]
-                namecol = cols.get("security", cols.get("company"))
-                w = t[[symcol, namecol]].rename(columns={symcol: "Ticker", namecol: "Company"})
-                w["Ticker"] = w["Ticker"].str.upper().str.strip()
+                sym = cols["symbol"]; name = cols.get("security", cols.get("company"))
+                w = t[[sym, name]].rename(columns={sym:"Ticker", name:"Company"})
+                w["Ticker"]  = w["Ticker"].str.upper().str.strip()
                 w["Company"] = w["Company"].str.strip()
-                return w[["Ticker", "Company"]]
-    except Exception:
+                return w[["Ticker","Company"]]
+    except:  # noqa: E722
         pass
-    # Minimal fallback so app still runs
+    # minimal fallback so the app runs
     fallback = [
-        ("AAPL", "Apple Inc."), ("MSFT", "Microsoft Corporation"),
-        ("NVDA", "NVIDIA Corporation"), ("AMZN", "Amazon.com, Inc."),
-        ("META", "Meta Platforms, Inc."), ("GOOGL", "Alphabet Inc. (Class A)"),
-        ("UNH", "UnitedHealth Group Incorporated"), ("ANET", "Arista Networks, Inc."),
-        ("ARM", "Arm Holdings plc"), ("NFLX", "Netflix, Inc."), ("PLTR", "Palantir Technologies Inc.")
+        ("AAPL","Apple Inc."), ("MSFT","Microsoft Corporation"),
+        ("NVDA","NVIDIA Corporation"), ("AMZN","Amazon.com, Inc."),
+        ("META","Meta Platforms, Inc."), ("GOOGL","Alphabet Inc. (Class A)"),
+        ("UNH","UnitedHealth Group Incorporated"), ("ANET","Arista Networks, Inc."),
+        ("ARM","Arm Holdings plc"), ("NFLX","Netflix, Inc."), ("PLTR","Palantir Technologies Inc.")
     ]
-    return pd.DataFrame(fallback, columns=["Ticker", "Company"])
+    return pd.DataFrame(fallback, columns=["Ticker","Company"])
 
 SP500 = load_sp500()
 _ALL_TICKERS = set(SP500["Ticker"])
 
-# ---------------- Name / ticker resolver ----------------
+# ================== Resolver ==================
 def name_to_ticker(user_text: str) -> str | None:
     """Resolve company name OR raw ticker. Always accept ticker-like tokens."""
-    if not user_text:
-        return None
+    if not user_text: return None
     raw = user_text.strip()
     cleaned = clean_tok(raw)
 
-    # Already an S&P ticker?
-    if cleaned in _ALL_TICKERS:
+    if cleaned in _ALL_TICKERS:  # exact ticker match in S&P
         return cleaned
 
-    # Looks like a ticker (1–6 chars A/Z/0-9/.-)? accept anyway
     if 1 <= len(cleaned) <= 6 and re.fullmatch(r"[A-Z0-9.\-]{1,6}", cleaned):
-        return cleaned
+        return cleaned  # accept typed ticker even if not in S&P
 
-    # Otherwise, company name contains match
     cand = SP500[SP500["Company"].str.upper().str.contains(re.escape(raw.upper()))]
     if not cand.empty:
         return cand.iloc[0]["Ticker"]
 
-    # Last resort
     return cleaned or None
 
 def expand_input_to_tickers(text: str) -> list[str]:
-    if not (text or "").strip():
-        return []
+    if not (text or "").strip(): return []
     toks = re.split(r"[,\n;| ]+", text.strip())
     out = []
     for t in toks:
         tk = name_to_ticker(t)
-        if tk:
-            out.append(tk)
-    # unique, keep order
-    seen = set(); dedup = []
+        if tk: out.append(tk)
+    seen=set(); dedup=[]
     for x in out:
         if x not in seen:
             seen.add(x); dedup.append(x)
     return dedup
 
-# ---------------- Scoring (0–10; missing -> 0, except PEG neutral=5) ----------------
+# ================== Scoring ==================
 def s_rev(y):
     if y is None or pd.isna(y): return 0
     if y > 20: return 10
@@ -179,8 +154,7 @@ def s_de(x):
     return 0
 
 def s_peg(p):
-    # PEG missing -> neutral 5 (not punitive)
-    if p is None or pd.isna(p): return 5
+    if p is None or pd.isna(p): return 5  # neutral when PEG missing
     if p < 1:  return 10
     if p < 2:  return 6
     if p < 3:  return 3
@@ -196,10 +170,9 @@ def s_fcfy(y):
     return 0
 
 def moat_avg(brand, barriers, switching, network, scale):
-    # Adam Khoo–style: Barriers & Scale weighted higher
-    w = [1.0, 1.25, 1.0, 0.75, 1.25]
+    w = [1.0, 1.25, 1.0, 0.75, 1.25]  # Adam‑Khoo style emphasis on Barriers/Scale
     v = [brand, barriers, switching, network, scale]
-    return round(sum(vi*wi for vi, wi in zip(v, w)) / sum(w), 2)
+    return round(sum(vi*wi for vi,wi in zip(v,w)) / sum(w), 2)
 
 def moat_note(name, label, score):
     if score >= 9:
@@ -220,11 +193,10 @@ def moat_note(name, label, score):
 def total_score(rev_s, de_s, fcfy_s, peg_s, moat_s):
     return round((rev_s + de_s + fcfy_s + peg_s + moat_s) / 5.0, 2)
 
-# ---------------- Data fetch ----------------
+# ================== Data fetch ==================
 def first_val(series, keys):
     for k in keys:
-        if k in series and pd.notna(series[k]):
-            return series[k]
+        if k in series and pd.notna(series[k]): return series[k]
     return None
 
 def fetch_snapshot(tk: str):
@@ -234,7 +206,7 @@ def fetch_snapshot(tk: str):
 
     price = safe_price(t)
 
-    # PEG with fallback
+    # PEG (with fallback)
     peg = info.get("pegRatio")
     if peg is None or pd.isna(peg):
         peg = _fallback_peg(t, price, info)
@@ -244,9 +216,8 @@ def fetch_snapshot(tk: str):
     if info.get("revenueGrowth") is not None:
         try:
             rg = float(info["revenueGrowth"])
-            yoy = rg * 100 if abs(rg) <= 1 else rg
-        except Exception:
-            pass
+            yoy = rg*100 if abs(rg) <= 1 else rg
+        except: pass
     if yoy is None:
         try:
             inc = t.financials
@@ -255,29 +226,25 @@ def fetch_snapshot(tk: str):
                 if k:
                     rev = inc.loc[k[0]].dropna()
                     if len(rev) >= 2 and float(rev.iloc[1]) != 0:
-                        yoy = float((rev.iloc[0] - rev.iloc[1]) / rev.iloc[1] * 100.0)
-        except Exception:
-            pass
+                        yoy = float((rev.iloc[0]-rev.iloc[1]) / rev.iloc[1] * 100.0)
+        except: pass
 
     # Debt/Equity
     de = info.get("debtToEquity")
     try:
         if de is not None:
             de = float(de)
-            if de > 10:  # sometimes percent-like
-                de = de / 100.0
-    except Exception:
-        de = None
+            if de > 10: de = de/100.0  # some feeds look like %
+    except: de = None
     if de is None:
         try:
             bs = t.balance_sheet
             if bs is not None and not bs.empty:
-                total_debt = first_val(bs.iloc[:, 0], ["Total Debt", "Short Long Term Debt", "Short/Long Term Debt", "Total Liab"])
-                equity = first_val(bs.iloc[:, 0], ["Total Stockholder Equity", "Total Shareholder Equity", "Stockholders Equity"])
-                if total_debt is not None and equity not in (None, 0):
-                    de = float(total_debt) / float(equity)
-        except Exception:
-            pass
+                total_debt = first_val(bs.iloc[:,0], ["Total Debt","Short Long Term Debt","Short/Long Term Debt","Total Liab"])
+                equity     = first_val(bs.iloc[:,0], ["Total Stockholder Equity","Total Shareholder Equity","Stockholders Equity"])
+                if total_debt is not None and equity not in (None,0):
+                    de = float(total_debt)/float(equity)
+        except: pass
 
     # FCF & FCF Yield
     fcf = info.get("freeCashflow")
@@ -285,22 +252,21 @@ def fetch_snapshot(tk: str):
         try:
             cf = t.cashflow
             if cf is not None and not cf.empty:
-                ocf = first_val(cf.iloc[:, 0], ["Total Cash From Operating Activities", "Operating Cash Flow"])
-                capx = first_val(cf.iloc[:, 0], ["Capital Expenditures", "Capital Expenditure"])
+                ocf  = first_val(cf.iloc[:,0], ["Total Cash From Operating Activities","Operating Cash Flow"])
+                capx = first_val(cf.iloc[:,0], ["Capital Expenditures","Capital Expenditure"])
                 if ocf is not None and capx is not None:
                     fcf = float(ocf) + float(capx)  # capex usually negative
-        except Exception:
-            pass
+        except: pass
     mktcap = info.get("marketCap")
-    fcfy = (float(fcf) / float(mktcap) * 100.0) if (fcf and mktcap and mktcap > 0) else None
+    fcfy = (float(fcf)/float(mktcap)*100.0) if (fcf and mktcap and mktcap>0) else None
 
-    # scores
+    # Scores
     rev_s  = s_rev(yoy)
     de_s   = s_de(de)
     peg_s  = s_peg(peg)
     fcfy_s = s_fcfy(fcfy)
 
-    # moat (uses sidebar selections)
+    # Moat (from sidebar sliders)
     company_moat = moat_avg(brand, barriers, switching, network, scale)
     notes = "\n".join([
         moat_note(name, "1) Brand & Pricing", brand),
@@ -323,7 +289,7 @@ def fetch_snapshot(tk: str):
         "Profile": f"https://finance.yahoo.com/quote/{tk}/profile"
     }
 
-# ---------------- Sidebar controls ----------------
+# ================== Sidebar controls ==================
 st.sidebar.header("Economic Moat (subscores 0–10)")
 brand     = st.sidebar.slider("1) Brand & Pricing",      0, 10, 6)
 barriers  = st.sidebar.slider("2) Barriers to Entry",    0, 10, 7)
@@ -347,7 +313,100 @@ min_rev  = st.sidebar.number_input("Screener: Min Revenue Growth %", value=23.0,
 max_peg  = st.sidebar.number_input("Screener: Max PEG", value=5.0, step=0.1)
 max_de   = st.sidebar.number_input("Screener: Max Debt/Equity", value=3.0, step=0.1)
 min_fcfy = st.sidebar.number_input("Screener: Min FCF Yield %", value=-5.0, step=0.5)
+
+# ================== Main input + Run ==================
 defaults = "AAPL, MSFT, NVDA, AMZN, META, GOOGL, UNH, ANET, ARM, NFLX, PLTR"
 user_text = st.text_area("Enter tickers or company names (comma/space/newline)", defaults)
+
+typed = expand_input_to_tickers(user_text or defaults)
+universe = list(SP500["Ticker"]) if scan_all else typed
+if scan_all:
+    universe = sorted(set(universe).union(set(typed)))  # include any typed extras
+
+run = st.button("Run", type="primary")
+
+# ================== Execute ==================
+if run:
+    if not universe:
+        st.warning("No valid tickers found. Try typing names (e.g., 'Palantir') or enable S&P scan.")
+    rows = []
+    prog = st.progress(0.0, text="Fetching...")
+    for i, tk in enumerate(universe):
+        try:
+            rows.append(fetch_snapshot(tk))
+        except Exception as e:
+            st.warning(f"Fetch failed for {tk}: {e}")
+        prog.progress((i+1)/max(len(universe),1), text=f"Processed {i+1}/{len(universe)}")
+
+    df = pd.DataFrame(rows)
+
+    # Screener pre-filter (only when scanning S&P)
+    screener_ok = pd.Series(True, index=df.index)
+    if scan_all:
+        screener_ok = (
+            df["Moat Score"].fillna(0) >= float(min_moat)
+        ) & (
+            df["Revenue Growth YoY (%)"].fillna(-1e9) >= float(min_rev)
+        ) & (
+            df["PEG Ratio"].fillna(1e9) <= float(max_peg)
+        ) & (
+            df["Debt/Equity"].fillna(1e9) <= float(max_de)
+        ) & (
+            df["FCF Yield (%)"].fillna(-1e9) >= float(min_fcfy)
+        )
+
+    # UI filters (NaN-friendly)
+    moat_ok  = df["Moat Score"].fillna(0).between(flt_moat[0], flt_moat[1])
+    total_ok = df["Total Score"].fillna(0).between(flt_total[0], flt_total[1])
+    rev_ok   = df["Revenue Growth YoY (%)"].isna() | (df["Revenue Growth YoY (%)"] >= flt_rev)
+    peg_ok   = df["PEG Ratio"].isna() | (df["PEG Ratio"] <= flt_peg)
+    de_ok    = df["Debt/Equity"].isna() | (df["Debt/Equity"] <= flt_de)
+    fcfy_ok  = df["FCF Yield (%)"].isna() | (df["FCF Yield (%)"] >= flt_fcfy)
+    price_ok = df["Price"].isna() | (df["Price"] >= flt_price)
+
+    filt = screener_ok & moat_ok & total_ok & rev_ok & peg_ok & de_ok & fcfy_ok & price_ok
+    df_f = df[filt].reset_index(drop=True)
+
+    # Link column (ticker -> Yahoo profile)
+    df_f.insert(1, "Profile Link", df_f["Profile"])
+    colcfg = {
+        "Profile Link": st.column_config.LinkColumn("Ticker (link)", help="Open Yahoo profile", display_text="→"),
+        "Profile": None  # hide raw URL
+    }
+
+    st.subheader("Filtered Results")
+    st.dataframe(
+        df_f.drop(columns=[c for c in ["Profile"] if c in df_f.columns]),
+        use_container_width=True, height=520, column_config=colcfg
+    )
+    st.caption(f"Showing {len(df_f)} of {len(df)} rows")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button("Download FILTERED (Excel)",
+            data=excel_bytes(df_f, "Filtered"),
+            file_name="bullstock_filtered.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Download FILTERED (CSV)",
+            data=df_f.to_csv(index=False).encode("utf-8"),
+            file_name="bullstock_filtered.csv", mime="text/csv")
+    with c2:
+        st.download_button("Download ALL (Excel)",
+            data=excel_bytes(df, "All"),
+            file_name="bullstock_all.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Download ALL (CSV)",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name="bullstock_all.csv", mime="text/csv")
+
+    with st.expander("Appendix: Scoring Rules"):
+        st.markdown(
+            "- Revenue Growth YoY (0–10): >20%→10, >10%→8, >5%→6, >0%→4, else 0.\n"
+            "- Debt/Equity (0–10, lower better): <0.5→10, <1.0→7, <2.0→4, else 0.\n"
+            "- PEG (0–10, lower better): <1→10, <2→6, <3→3, else 0; **missing PEG = neutral 5**.\n"
+            "- FCF Yield (0–10, higher better): >8%→10, >5%→8, >3%→6, >1%→4, >0%→2, else 0.\n"
+            "- Moat: weighted avg (Brand 1.0, Barriers 1.25, Switching 1.0, Network 0.75, Scale 1.25) with narrative notes.\n"
+            "- Total Score: equal‑weighted average of Revenue, D/E, FCF‑Yield, PEG, and Moat."
+        )
 else:
-    st.info("Type names or tickers (e.g., ‘Palantir’ or ‘PLTR’) or enable ‘Scan entire S&P 500’, then press Run.")
+    st.info("Type names/tickers (e.g., ‘Palantir’ or ‘PLTR’) or enable ‘Scan entire S&P 500’, then press Run.")
