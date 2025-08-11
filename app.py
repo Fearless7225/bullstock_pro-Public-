@@ -349,36 +349,29 @@ if run:
             df["FCF Yield (%)"].fillna(-1e9) >= float(min_fcfy)
         )
 
-    # Checkbox-driven filters with AND/OR
-    if mode == "AND":
-        cond = pd.Series(True, index=df.index)
-    else:  # OR mode
-        cond = pd.Series(False, index=df.index)
+  # ---- Checkbox-driven filters with AND/OR (no nonlocal) ----
+conds = []
+if en_moat:
+    conds.append(df["Moat Score"].fillna(0).between(flt_moat[0], flt_moat[1]))
+if en_total:
+    conds.append(df["Total Score"].fillna(0).between(flt_total[0], flt_total[1]))
+if en_rev:
+    conds.append(df["Revenue Growth YoY (%)"].fillna(-1e9) >= flt_rev)
+if en_peg:
+    conds.append(df["PEG Ratio"].fillna(1e9) <= flt_peg)
+if en_de:
+    conds.append(df["Debt/Equity"].fillna(1e9) <= flt_de)
+if en_fcfy:
+    conds.append(df["FCF Yield (%)"].fillna(-1e9) >= flt_fcfy)
+if en_price:
+    conds.append(df["Price"].fillna(-1e9) >= flt_price)
 
-    def apply_and(series):
-        nonlocal cond
-        cond &= series
-
-    def apply_or(series):
-        nonlocal cond
-        cond |= series
-
-    applier = apply_and if mode == "AND" else apply_or
-
-    if en_moat:
-        applier(df["Moat Score"].fillna(0).between(flt_moat[0], flt_moat[1]))
-    if en_total:
-        applier(df["Total Score"].fillna(0).between(flt_total[0], flt_total[1]))
-    if en_rev:
-        applier(df["Revenue Growth YoY (%)"].fillna(-1e9) >= flt_rev)
-    if en_peg:
-        applier(df["PEG Ratio"].fillna(1e9) <= flt_peg)
-    if en_de:
-        applier(df["Debt/Equity"].fillna(1e9) <= flt_de)
-    if en_fcfy:
-        applier(df["FCF Yield (%)"].fillna(-1e9) >= flt_fcfy)
-    if en_price:
-        applier(df["Price"].fillna(-1e9) >= flt_price)
+if not conds:
+    cond = pd.Series(True, index=df.index)  # nothing checked => keep all
+else:
+    cond = conds[0]
+    for c in conds[1:]:
+        cond = (cond & c) if mode == "AND" else (cond | c)
 
     # If no checkbox selected, keep all
     if not any([en_moat, en_total, en_rev, en_peg, en_de, en_fcfy, en_price]):
